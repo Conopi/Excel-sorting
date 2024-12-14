@@ -62,16 +62,16 @@ ws = wb.create_sheet(title=sheet_name)
 
 # Устанавливаем заголовок и дату
 today_text = f"на «{target_date.strftime('%d')}» _{target_date.strftime('%m')}_ {target_date.strftime('%Y')} года."
-ws.merge_cells("A1:D1")
+ws.merge_cells("A1:F1")
 ws["A1"] = "ЗАЯВКА"
 ws["A1"].font = Font(bold=True, size=16)
 ws["A1"].alignment = Alignment(horizontal="center")
 
-ws.merge_cells("A2:D2")
+ws.merge_cells("A2:F2")
 ws["A2"] = "на предъявление и сдачу продукции ОТК"
 ws["A2"].alignment = Alignment(horizontal="center")
 
-ws.merge_cells("A3:D3")
+ws.merge_cells("A3:F3")
 ws["A3"] = today_text
 ws["A3"].alignment = Alignment(horizontal="center")
 
@@ -82,9 +82,11 @@ ws.column_dimensions['A'].width = 40
 ws.column_dimensions['B'].width = 20
 ws.column_dimensions['C'].width = 15
 ws.column_dimensions['D'].width = 20
+ws.column_dimensions['E'].width = 15
+ws.column_dimensions['F'].width = 15
 
 # Добавляем заголовки столбцов таблицы
-headers = ["Наименование предъявляемой продукции", "№ продукции", "Количество", "Наименование цеха"]
+headers = ["Наименование предъявляемой продукции", "№ продукции", "Количество", "Наименование цеха", "Начало работ", "Окончание работ"]
 ws.append(headers)
 for col_num, header in enumerate(headers, 1):
     cell = ws.cell(row=5, column=col_num, value=header)
@@ -92,22 +94,22 @@ for col_num, header in enumerate(headers, 1):
 
 row_index = 6  # Начальная строка для данных
 
-# Функция для проверки значимых строк
-def is_significant_row(row):
-    name = str(row.get('Наименование', '')).strip()
-    loco_number = str(row.get('№ тепловоза', '')).strip()
-    return (
-        name and loco_number and
-        re.search(r'[A-Za-zА-Яа-я0-9]', name) is not None and
-        re.search(r'[A-Za-zА-Яа-я0-9]', loco_number) is not None
-    )
+# Функция для парсинга времени
+def parse_time(value):
+    if isinstance(value, str):
+        match = re.match(r'^(\d{1,2}):(\d{2})(?::\d{2})?$', value)
+        if match:
+            hours, minutes = match.groups()[:2]
+            return f"{int(hours):02}:{minutes}"
+    return ''
 
 # Чтение данных из исходных папок заводов и заполнение таблицы
 factories = ['ЦКТ', 'ЦПМ', 'МСЦ', 'ЭМУ']
 
+data = []  # Для хранения всех строк перед сортировкой
+
 for factory in factories:
     factory_dir = os.path.join(inputDir, factory)
-    start_row = row_index  # начальная строка для объединения
 
     for root, dirs, files in os.walk(factory_dir):
         for filename in files:
@@ -124,44 +126,65 @@ for factory in factories:
                         sheet = workbook[sheet_name]
                         df = pd.read_excel(file_path, sheet_name=sheet_name, header=[2])
 
-                        for i, r in df.iterrows():
-                            if is_significant_row(r):
-                                # Извлечение данных, включая точное название столбца для "Количество"
-                                product_name = r['Наименование']
-                                product_number = r['№ тепловоза']
-                                quantity = r.get('Количество номенклатуры предъявляемая ОТК',
-                                                 1)  # Используйте точное название столбца
+                        for _, row in df.iterrows():
+                            # Проверяем наличие данных "Сдача ОТК"
+                            if pd.notna(row.get('Количество номенклатуры предъявляемая ОТК')):
+                                product_name = row['Наименование']
+                                product_number = row['№ тепловоза']
+                                quantity = row.get('Количество номенклатуры предъявляемая ОТК', 1)
                                 workshop = factory
 
-                                ws.cell(row=row_index, column=1, value=product_name)
-                                ws.cell(row=row_index, column=2, value=product_number)
-                                ws.cell(row=row_index, column=3, value=quantity)
-                                ws.cell(row=row_index, column=4, value=workshop)
+                                # Извлечение времени
+                                raw_start_time = str(row.get('План', '')).strip()
+                                raw_end_time = str(row.get('Unnamed: 7', '')).strip()
 
-                                for col in range(1, 5):
-                                    apply_cell_style(ws.cell(row=row_index, column=col), border=thin_border)
+                                start_time = parse_time(raw_start_time)
+                                end_time = parse_time(raw_end_time)
 
-                                row_index += 1
+                                # Добавляем данные в список для записи
+                                data.append([product_name, product_number, quantity, workshop, start_time, end_time])
 
                 except Exception as e:
                     print(f"Ошибка при обработке файла {filename}: {e}")
 
-    # Объединение ячеек в столбце "Наименование цеха" для текущего цеха
-    if row_index > start_row:  # проверяем, есть ли строки для объединения
-        ws.merge_cells(start_row=start_row, start_column=4, end_row=row_index - 1, end_column=4)
-        apply_cell_style(ws.cell(row=start_row, column=4), bold=True, align_center=True, border=thin_border)
+# Сортировка данных по цеху
+data.sort(key=lambda x: x[3])  # Сортируем по столбцу "Наименование цеха"
 
-# Удаление пустых строк между заводами и в начале
-for row in range(row_index, 5, -1):
-    if all(ws.cell(row=row, column=col).value in [None, ""] for col in range(1, 5)):
-        ws.delete_rows(row, 1)
+# Записываем отсортированные данные в Excel
+for row in data:
+    for col_num, value in enumerate(row, 1):
+        cell = ws.cell(row=row_index, column=col_num, value=value)
+        apply_cell_style(cell, border=thin_border)
+    row_index += 1
+
+# Объединяем ячейки в столбце "Наименование цеха"
+def merge_workshop_cells(ws, start_row, end_row, col_index=4):
+    current_value = None
+    merge_start = start_row
+
+    for row in range(start_row, end_row + 1):
+        cell_value = ws.cell(row=row, column=col_index).value
+
+        if cell_value != current_value:
+            if current_value is not None and merge_start < row - 1:
+                ws.merge_cells(start_row=merge_start, start_column=col_index, end_row=row - 1, end_column=col_index)
+                apply_cell_style(ws.cell(row=merge_start, column=col_index), align_center=True, border=thin_border)
+
+            current_value = cell_value
+            merge_start = row
+
+    if current_value is not None and merge_start < end_row:
+        ws.merge_cells(start_row=merge_start, start_column=col_index, end_row=end_row, end_column=col_index)
+        apply_cell_style(ws.cell(row=merge_start, column=col_index), align_center=True, border=thin_border)
+
+merge_workshop_cells(ws, start_row=6, end_row=row_index - 1)
 
 # Добавляем подпись начальника смены в конце
-ws.merge_cells(f"A{row_index}:D{row_index}")
+ws.merge_cells(f"A{row_index}:F{row_index}")
 ws[f"A{row_index}"] = "Начальник смены"
 ws[f"A{row_index}"].alignment = Alignment(horizontal="right")
 
-# Функция для сортировки листов по дате
+# Сортируем листы по дате
 def sort_worksheets_by_date(wb):
     date_sheets = {}
     for sheet in wb.sheetnames:
@@ -176,7 +199,6 @@ def sort_worksheets_by_date(wb):
         sheet = wb[sheetname]
         wb.move_sheet(sheet, i + 1)
 
-# Сортируем листы по дате
 sort_worksheets_by_date(wb)
 
 # Сохранение файла

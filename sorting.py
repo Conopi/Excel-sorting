@@ -137,6 +137,13 @@ def parse_time(value):
     return ''
 
 
+def is_otk_work(row):
+    # Проверяем, заполнен ли столбец "Сдача ОТК"
+    otk_value = row.get('Количество номенклатуры предъявляемая ОТК', None)
+    return pd.notna(otk_value) and str(otk_value).strip() != ''
+
+
+# Основной цикл обработки данных
 for factory in factories:
     factory_dir = os.path.join(inputDir, factory)
     for root, dirs, files in os.walk(factory_dir):
@@ -150,10 +157,8 @@ for factory in factories:
                 try:
                     workbook = load_workbook(file_path, data_only=True)
 
-                    # Определяем имя листа, соответствующее указанной дате
                     sheet_name = target_date.strftime('%d.%m.%Y')
 
-                    # Проверяем, если лист с нужной датой существует
                     if sheet_name in workbook.sheetnames:
                         sheet = workbook[sheet_name]
 
@@ -165,21 +170,22 @@ for factory in factories:
                                 loco_number = clean_text(r['№ тепловоза'])
                                 work_name = clean_text(r['Наименование'])
 
-                                # Оставшаяся логика обработки строки
+                                # Пропускаем строки, где "Сдача ОТК" не пустая
+                                if is_otk_work(r):
+                                    continue
+
                                 completion = r.get('Процент выполнения работы', '')
                                 if pd.notna(completion) and isinstance(completion, float):
                                     completion = f"{int(completion * 100)}%"
                                 else:
                                     completion = ''
 
-                                # Получение времени начала и окончания работы с использованием parse_time
                                 raw_start_time = str(r.get('План', '')).strip()
                                 raw_end_time = str(r.get('Unnamed: 7', '')).strip()
 
                                 start_time = parse_time(raw_start_time)
                                 end_time = parse_time(raw_end_time)
 
-                                # Добавление в итоговую структуру
                                 if loco_number not in loco_data:
                                     loco_data[loco_number] = {}
                                 if factory not in loco_data[loco_number]:
